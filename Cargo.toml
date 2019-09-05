@@ -6,9 +6,10 @@ authors = ["Trixnz"]
 repository = "https://github.com/trixnz/rustsym"
 readme = "README.md"
 license = "MIT"
+edition = "2018"
 
 [dependencies]
-syntex_syntax = "0.59.1"
+syntax = { package = "rustc-ap-syntax", version = "580.0.0" }
 rustc-serialize = "0.3.24"
 clap = "2.33.0"
 walkdir = "2.2.9"

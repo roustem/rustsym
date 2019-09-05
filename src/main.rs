@@ -1,10 +1,3 @@
-extern crate syntex_syntax as syntax;
-extern crate rustc_serialize;
-extern crate clap;
-extern crate walkdir;
-extern crate syncbox;
-extern crate num_cpus;
-
 #[cfg(test)]
 extern crate tempfile;
 
@@ -12,10 +5,10 @@ mod visitor;
 
 use rustc_serialize::{json, Encodable, Encoder};
 
-use clap::{App, Arg, SubCommand, AppSettings};
+use clap::{App, AppSettings, Arg, SubCommand};
 
 use syntax::parse::{self, ParseSess};
-use syntax::codemap::{FilePathMapping};
+use syntax::source_map::FilePathMapping;
 use syntax::visit;
 
 use std::path::Path;
@@ -41,7 +34,7 @@ enum MatchKind {
 // Required to convert the `MatchKind` enum fields to lowercase in the JSON output
 impl Encodable for MatchKind {
     fn encode<E: Encoder>(&self, e: &mut E) -> Result<(), E::Error> {
-        try!(e.emit_str(match *self {
+        e.emit_str(match *self {
             MatchKind::Module => "module",
 
             MatchKind::Struct => "struct",
@@ -56,7 +49,7 @@ impl Encodable for MatchKind {
 
             MatchKind::Macro => "macro",
             MatchKind::Trait => "trait",
-        }));
+        })?;
 
         Ok(())
     }
@@ -93,11 +86,11 @@ fn dump_ast(matches: &clap::ArgMatches) {
 }
 
 fn search_symbol_global(path: &str, query: &str) -> Vec<Match> {
-    use walkdir::WalkDir;
-    use syncbox::{ThreadPool, Run};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc::channel;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use syncbox::{Run, ThreadPool};
+    use walkdir::WalkDir;
 
     let crate_root = Path::new(path);
 
@@ -105,10 +98,10 @@ fn search_symbol_global(path: &str, query: &str) -> Vec<Match> {
     // the crate root as we make some assumptions about the environment.
     match std::fs::metadata(crate_root.join("Cargo.toml")) {
         Ok(_) => {}
-        Err(_) => {
-            panic!("Failed to open Cargo.toml. When searching globally, you must begin at the \
-                    crate root")
-        }
+        Err(_) => panic!(
+            "Failed to open Cargo.toml. When searching globally, you must begin at the \
+             crate root"
+        ),
     };
 
     let target_dir = crate_root.join("target");
@@ -190,8 +183,8 @@ fn search_symbol_file(file: &str, query: &str, search_children: bool) -> Vec<Mat
     use visitor::SymbolVisitor;
     let mut visitor = SymbolVisitor {
         matches: vec![],
-        codemap: session.codemap(),
-        search_children: search_children,
+        codemap: session.source_map(),
+        search_children,
         query: query.to_lowercase(),
     };
 
@@ -223,29 +216,44 @@ fn main() {
         .version(env!("CARGO_PKG_VERSION"))
         .author(env!("CARGO_PKG_AUTHORS"))
         .about(env!("CARGO_PKG_DESCRIPTION"))
-        .settings(&[AppSettings::GlobalVersion, AppSettings::SubcommandRequiredElseHelp])
-        .subcommand(SubCommand::with_name("ast")
-            .about("Pretty print the AST for the provided rust source file")
-            .setting(AppSettings::ArgRequiredElseHelp)
-            .arg(Arg::with_name("file")
-                .required(true)
-                .help("The rust source file to print the AST for")))
-        .subcommand(SubCommand::with_name("search")
-            .about("Search for a symbol")
-            .setting(AppSettings::ArgRequiredElseHelp)
-            .arg(Arg::with_name("local")
-                .long("local")
-                .short("l")
-                .help("Search for symbols found only in the provided rust source file"))
-            .arg(Arg::with_name("global")
-                .long("global")
-                .short("g")
-                .conflicts_with("local")
-                .help("Search for symbols found in the entire crate"))
-            .arg(Arg::with_name("file")
-                .required(true)
-                .help("The rust source file or crate root to search for symbols in"))
-            .arg(Arg::with_name("query").help("Optional string to match symbols against")));
+        .settings(&[
+            AppSettings::GlobalVersion,
+            AppSettings::SubcommandRequiredElseHelp,
+        ])
+        .subcommand(
+            SubCommand::with_name("ast")
+                .about("Pretty print the AST for the provided rust source file")
+                .setting(AppSettings::ArgRequiredElseHelp)
+                .arg(
+                    Arg::with_name("file")
+                        .required(true)
+                        .help("The rust source file to print the AST for"),
+                ),
+        )
+        .subcommand(
+            SubCommand::with_name("search")
+                .about("Search for a symbol")
+                .setting(AppSettings::ArgRequiredElseHelp)
+                .arg(
+                    Arg::with_name("local")
+                        .long("local")
+                        .short("l")
+                        .help("Search for symbols found only in the provided rust source file"),
+                )
+                .arg(
+                    Arg::with_name("global")
+                        .long("global")
+                        .short("g")
+                        .conflicts_with("local")
+                        .help("Search for symbols found in the entire crate"),
+                )
+                .arg(
+                    Arg::with_name("file")
+                        .required(true)
+                        .help("The rust source file or crate root to search for symbols in"),
+                )
+                .arg(Arg::with_name("query").help("Optional string to match symbols against")),
+        );
     let matches = app.get_matches();
 
     if let (cmd, Some(m)) = matches.subcommand() {
@@ -264,7 +272,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{Match, MatchKind, search_symbol_file};
+    use super::{search_symbol_file, Match, MatchKind};
     use tempfile::NamedTempFile;
 
     fn create_source_tmp(src: &'static str) -> NamedTempFile {
@@ -282,7 +290,8 @@ mod tests {
     }
 
     fn test_symbol<F>(src: &'static str, symbol_name: &str, test_fn: &F)
-        where F: Fn(&Match)
+    where
+        F: Fn(&Match),
     {
         let matches = get_symbol_matches(src, symbol_name);
         let candidate: &Match = matches.first().expect("Failed to find any matches");
@@ -291,7 +300,8 @@ mod tests {
     }
 
     fn test_symbols<F>(src: &'static str, symbols: Vec<&str>, test_fn: F)
-        where F: Fn(&Match)
+    where
+        F: Fn(&Match),
     {
         for symbol in symbols {
             test_symbol(src, symbol, &test_fn);
@@ -320,14 +330,12 @@ mod tests {
             }
         ";
 
-        test_symbols(src,
-                     vec!["test_fn", "TEST_fn"],
-                     &|symbol: &Match| {
-                         assert_eq!(symbol.name, "test_fn");
-                         assert_eq!(symbol.container, "TestStruct");
-                         assert_eq!(symbol.kind, MatchKind::Method);
-                         assert_eq!(symbol.line, 5);
-                     });
+        test_symbols(src, vec!["test_fn", "TEST_fn"], &|symbol: &Match| {
+            assert_eq!(symbol.name, "test_fn");
+            assert_eq!(symbol.container, "TestStruct");
+            assert_eq!(symbol.kind, MatchKind::Method);
+            assert_eq!(symbol.line, 5);
+        });
     }
 
     #[test]
@@ -338,70 +346,60 @@ mod tests {
             }
         ";
 
-        test_symbols(src,
-                     vec!["test_field", "field"],
-                     &|symbol: &Match| {
-                         assert_eq!(symbol.name, "test_field");
-                         assert_eq!(symbol.container, "TestStruct");
-                         assert_eq!(symbol.kind, MatchKind::Field);
-                         assert_eq!(symbol.line, 3);
-                     });
+        test_symbols(src, vec!["test_field", "field"], &|symbol: &Match| {
+            assert_eq!(symbol.name, "test_field");
+            assert_eq!(symbol.container, "TestStruct");
+            assert_eq!(symbol.kind, MatchKind::Field);
+            assert_eq!(symbol.line, 3);
+        });
     }
 
     #[test]
     fn check_function() {
         let src = "fn test_fn() {}";
 
-        test_symbols(src,
-                     vec!["test_fn", "TEST_fn"],
-                     &|symbol: &Match| {
-                         assert_eq!(symbol.name, "test_fn");
-                         assert_eq!(symbol.container, "");
-                         assert_eq!(symbol.kind, MatchKind::Function);
-                         assert_eq!(symbol.line, 1);
-                     });
+        test_symbols(src, vec!["test_fn", "TEST_fn"], &|symbol: &Match| {
+            assert_eq!(symbol.name, "test_fn");
+            assert_eq!(symbol.container, "");
+            assert_eq!(symbol.kind, MatchKind::Function);
+            assert_eq!(symbol.line, 1);
+        });
     }
 
     #[test]
     fn check_constant() {
         let src = "const ConstSymbol: u32 = 0;";
 
-        test_symbols(src,
-                     vec!["ConstSymbol", "symbol"],
-                     &|symbol: &Match| {
-                         assert_eq!(symbol.name, "ConstSymbol");
-                         assert_eq!(symbol.container, "");
-                         assert_eq!(symbol.kind, MatchKind::Constant);
-                         assert_eq!(symbol.line, 1);
-                     });
+        test_symbols(src, vec!["ConstSymbol", "symbol"], &|symbol: &Match| {
+            assert_eq!(symbol.name, "ConstSymbol");
+            assert_eq!(symbol.container, "");
+            assert_eq!(symbol.kind, MatchKind::Constant);
+            assert_eq!(symbol.line, 1);
+        });
     }
 
     #[test]
     fn check_static() {
         let src = "static StaticSymbol: u32 = 0;";
 
-        test_symbols(src,
-                     vec!["StaticSymbol", "symbol"],
-                     &|symbol: &Match| {
-                         assert_eq!(symbol.name, "StaticSymbol");
-                         assert_eq!(symbol.container, "");
-                         assert_eq!(symbol.kind, MatchKind::Static);
-                         assert_eq!(symbol.line, 1);
-                     });
+        test_symbols(src, vec!["StaticSymbol", "symbol"], &|symbol: &Match| {
+            assert_eq!(symbol.name, "StaticSymbol");
+            assert_eq!(symbol.container, "");
+            assert_eq!(symbol.kind, MatchKind::Static);
+            assert_eq!(symbol.line, 1);
+        });
     }
 
     #[test]
     fn check_enum() {
         let src = "enum TestEnum {}";
 
-        test_symbols(src,
-                     vec!["TestEnum", "test"],
-                     &|symbol: &Match| {
-                         assert_eq!(symbol.name, "TestEnum");
-                         assert_eq!(symbol.container, "");
-                         assert_eq!(symbol.kind, MatchKind::Enum);
-                         assert_eq!(symbol.line, 1);
-                     });
+        test_symbols(src, vec!["TestEnum", "test"], &|symbol: &Match| {
+            assert_eq!(symbol.name, "TestEnum");
+            assert_eq!(symbol.container, "");
+            assert_eq!(symbol.kind, MatchKind::Enum);
+            assert_eq!(symbol.line, 1);
+        });
     }
 
     #[test]
@@ -412,14 +410,12 @@ mod tests {
             }
         ";
 
-        test_symbols(src,
-                     vec!["test_macro", "test"],
-                     &|symbol: &Match| {
-                         assert_eq!(symbol.name, "test_macro");
-                         assert_eq!(symbol.container, "");
-                         assert_eq!(symbol.kind, MatchKind::Macro);
-                         assert_eq!(symbol.line, 2);
-                     });
+        test_symbols(src, vec!["test_macro", "test"], &|symbol: &Match| {
+            assert_eq!(symbol.name, "test_macro");
+            assert_eq!(symbol.container, "");
+            assert_eq!(symbol.kind, MatchKind::Macro);
+            assert_eq!(symbol.line, 2);
+        });
     }
 
     #[test]

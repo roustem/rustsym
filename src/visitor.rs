@@ -1,12 +1,12 @@
-use {Match, MatchKind};
+use crate::{Match, MatchKind};
 
 use syntax::ast;
-use syntax::codemap::{CodeMap, Span};
+use syntax::source_map::{SourceMap, Span};
 use syntax::visit::{self, FnKind, Visitor};
 
 pub struct SymbolVisitor<'a> {
     pub matches: Vec<Match>,
-    pub codemap: &'a CodeMap,
+    pub codemap: &'a SourceMap,
     pub search_children: bool,
     pub query: String,
 }
@@ -19,14 +19,14 @@ impl<'a> SymbolVisitor<'a> {
         }
 
         let filename = self.codemap.span_to_filename(span);
-        let line = self.codemap.lookup_char_pos(span.lo).line;
+        let line = self.codemap.lookup_char_pos(span.lo()).line;
 
         self.matches.push(Match {
-            path: filename,
+            path: filename.to_string(),
             name: name.into(),
             container: container.unwrap_or_default().into(),
-            kind: kind,
-            line: line,
+            kind,
+            line,
         });
     }
 }
@@ -37,13 +37,15 @@ fn get_ident_name(ident: &ast::Ident) -> String {
 
 impl<'a> Visitor<'a> for SymbolVisitor<'a> {
     // Catch free standing functions
-    fn visit_fn(&mut self,
-                fn_kind: FnKind<'a>,
-                fn_decl: &'a ast::FnDecl,
-                span: Span,
-                _: ast::NodeId) {
+    fn visit_fn(
+        &mut self,
+        fn_kind: FnKind<'a>,
+        fn_decl: &'a ast::FnDecl,
+        span: Span,
+        _: ast::NodeId,
+    ) {
         let fn_name = match fn_kind {
-            FnKind::ItemFn(id, _, _, _, _, _, _) => Some(get_ident_name(&id)),
+            FnKind::ItemFn(id, _, _, _) => Some(get_ident_name(&id)),
             _ => None,
         };
 
@@ -56,21 +58,21 @@ impl<'a> Visitor<'a> for SymbolVisitor<'a> {
 
     // Catch pretty much everything else
     fn visit_item(&mut self, item: &'a ast::Item) {
-        use syntax::ast::ItemKind;
-        use syntax::ast::VariantData;
-        use syntax::ast::TraitItemKind;
         use syntax::ast::ImplItemKind;
+        use syntax::ast::ItemKind;
+        use syntax::ast::TraitItemKind;
+        use syntax::ast::VariantData;
 
         let item_name = get_ident_name(&item.ident);
 
         match item.node {
             ItemKind::Mod(ref mod_) => {
-
-                if !self.search_children {
-                    if self.codemap.span_to_filename(item.span) != self.codemap.span_to_filename(mod_.inner) {
-                        // Don't visit submodules that are not inline.
-                        return;
-                    }
+                if !self.search_children
+                    && self.codemap.span_to_filename(item.span)
+                        != self.codemap.span_to_filename(mod_.inner)
+                {
+                    // Don't visit submodules that are not inline.
+                    return;
                 }
 
                 self.create_match(&item_name, None, MatchKind::Module, item.span);
@@ -80,16 +82,17 @@ impl<'a> Visitor<'a> for SymbolVisitor<'a> {
                 self.create_match(&item_name, None, MatchKind::Struct, item.span);
 
                 match *variant {
-                    VariantData::Struct(ref fields, _) |
-                    VariantData::Tuple(ref fields, _) => {
+                    VariantData::Struct(ref fields, _) | VariantData::Tuple(ref fields, _) => {
                         for field in fields {
                             if let Some(field_ident) = field.ident {
                                 let field_name = get_ident_name(&field_ident);
 
-                                self.create_match(&field_name,
-                                                  Some(&item_name),
-                                                  MatchKind::Field,
-                                                  field.span);
+                                self.create_match(
+                                    &field_name,
+                                    Some(&item_name),
+                                    MatchKind::Field,
+                                    field.span,
+                                );
                             }
                         }
                     }
@@ -97,7 +100,7 @@ impl<'a> Visitor<'a> for SymbolVisitor<'a> {
                 }
             }
 
-            ItemKind::Trait(_, _, _, ref items) => {
+            ItemKind::Trait(_, _, _, _, ref items) => {
                 self.create_match(&item_name, None, MatchKind::Trait, item.span);
 
                 for v in items {
@@ -119,7 +122,8 @@ impl<'a> Visitor<'a> for SymbolVisitor<'a> {
                 self.create_match(&item_name, None, MatchKind::Enum, item.span);
 
                 for v in &def.variants {
-                    let variant_name = get_ident_name(&v.node.name);
+                    // let variant_name = get_ident_name(&v.node.name);
+                    let variant_name = get_ident_name(&v.ident);
 
                     self.create_match(&variant_name, Some(&item_name), MatchKind::Constant, v.span);
                 }
@@ -138,16 +142,19 @@ impl<'a> Visitor<'a> for SymbolVisitor<'a> {
 
                 // Figure out the struct name on the right hand side of the `impl` expression
                 if let ast::TyKind::Path(_, ref p) = ty.node {
-                    struct_name = get_ident_name(&p.segments[0].identifier);
+                    // struct_name = get_ident_name(&p.segments[0].identifier);
+                    struct_name = get_ident_name(&p.segments[0].ident);
                 }
 
                 // Now populate the methods
                 for item in items {
                     if let ImplItemKind::Method(_, _) = item.node {
-                        self.create_match(&get_ident_name(&item.ident),
-                                          Some(&struct_name),
-                                          MatchKind::Method,
-                                          item.span)
+                        self.create_match(
+                            &get_ident_name(&item.ident),
+                            Some(&struct_name),
+                            MatchKind::Method,
+                            item.span,
+                        )
                     }
                 }
             }
