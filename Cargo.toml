@@ -9,11 +9,11 @@ license = "MIT"
 
 [dependencies]
 syntex_syntax = "0.59.1"
-rustc-serialize = "0.3"
-clap = "2"
-walkdir = "0.1.5"
+rustc-serialize = "0.3.24"
+clap = "2.33.0"
+walkdir = "2.2.9"
 syncbox = "0.2.4"
-num_cpus = "0.2.13"
+num_cpus = "1.10.1"
 
 [dev-dependencies]
-tempfile = "2.1.4"
+tempfile = "3.1.0"
